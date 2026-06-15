@@ -5,11 +5,11 @@
  * tinting, rotation, and multiply-blend compositing.
  */
 
-import * as pdfjsLib from "pdfjs-dist";
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.min.mjs";
 
-// Use local worker from node_modules via Vite
+// Use legacy worker (bundles core-js polyfills for Map.prototype.getOrInsertComputed etc.)
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  "pdfjs-dist/build/pdf.worker.min.mjs",
+  "pdfjs-dist/legacy/build/pdf.worker.min.mjs",
   import.meta.url,
 ).toString();
 

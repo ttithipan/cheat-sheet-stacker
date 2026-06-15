@@ -13,6 +13,18 @@ Status tracking document. Records tasks, progress, blockers, and attempted solut
 
 ---
 
+## Currently Doing
+
+- (none)
+
+---
+
+## Bugs Fixed
+
+- [x] `getOrInsertComputed is not a function` crash — switched pdfjs-dist from modern build to legacy build (which bundles core-js polyfills for Map.prototype.getOrInsertComputed, a TC39 proposal only natively available in Chrome 136+ / Firefox 144+ / Safari 18.4+)
+
+---
+
 ## Completed
 
 - [x] Port all PDF processing from Python backend to client-side JS (pdfjs-dist + Canvas API)
@@ -35,12 +47,6 @@ Status tracking document. Records tasks, progress, blockers, and attempted solut
 - [x] Canvas maintains aspect ratio and fills available space
 - [x] Replace "Upload" with "Select" throughout UI
 - [x] Clean up UI: reduce text, remove page count chip, remove footer
-
----
-
-## Currently Doing
-
-- (none)
 
 ---
 
