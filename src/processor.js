@@ -2,7 +2,7 @@
  * processor.js — Client-side PDF processing pipeline.
  *
  * Uses pdfjs-dist for PDF rendering and the Canvas API for
- * tinting and diagonal-offset multiply-blend compositing.
+ * tinting, rotation and multiply-blend compositing.
  */
 
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.min.mjs";
@@ -28,13 +28,6 @@ export const DEFAULT_COLORS = [
   "#B1DD8C", // green
   "#B18CFE", // violet
 ];
-
-/** Default diagonal offset per page, as a percentage of the page. */
-export const DEFAULT_OFFSET_PERCENT = 2.7;
-
-// Stack geometry, expressed as a fraction of the sheet dimensions.
-// PAGE_INSET is the margin around the outside of the stack.
-const PAGE_INSET = 0.035;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -184,53 +177,79 @@ function tintImage(sourceCanvas, color) {
 }
 
 // ---------------------------------------------------------------------------
-// Compose a group of pages as a diagonally offset stack
+// Multiply blend
 // ---------------------------------------------------------------------------
 
-function composeGroup(pages, colorsRgb, offset) {
-  const sheetW = pages[0].width;
-  const sheetH = pages[0].height;
-  const count = pages.length;
+function multiplyBlend(baseCanvas, overlayCanvas) {
+  const result = document.createElement("canvas");
+  result.width = baseCanvas.width;
+  result.height = baseCanvas.height;
+  const ctx = result.getContext("2d");
 
-  const usableW = sheetW * (1 - 2 * PAGE_INSET);
-  const usableH = sheetH * (1 - 2 * PAGE_INSET);
-
-  // Each page sits `offset` (a fraction of the usable area) further right and
-  // down than the previous one, and every page shrinks by the total offset so
-  // the whole fan fits on the sheet. Pages are floored at one pixel so an
-  // extreme offset degrades to a thin fan instead of an invalid canvas.
-  const requestedStepX = count > 1 ? offset * usableW : 0;
-  const requestedStepY = count > 1 ? offset * usableH : 0;
-  const slotW = Math.max(1, usableW - requestedStepX * (count - 1));
-  const slotH = Math.max(1, usableH - requestedStepY * (count - 1));
-
-  // Derive the step from the actual slot so the last page stays on the sheet.
-  const stepX = count > 1 ? (usableW - slotW) / (count - 1) : 0;
-  const stepY = count > 1 ? (usableH - slotH) / (count - 1) : 0;
-
-  const sheet = createWhiteCanvas(sheetW, sheetH);
-  const ctx = sheet.getContext("2d");
-  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(baseCanvas, 0, 0);
   ctx.globalCompositeOperation = "multiply";
+  ctx.drawImage(overlayCanvas, 0, 0);
 
-  pages.forEach((page, idx) => {
-    const tinted = tintImage(page, colorsRgb[idx % colorsRgb.length]);
+  return result;
+}
 
-    // Contain-fit the page in its slot, preserving aspect ratio.
-    const fit = Math.min(slotW / tinted.width, slotH / tinted.height);
-    const w = Math.round(tinted.width * fit);
-    const h = Math.round(tinted.height * fit);
+// ---------------------------------------------------------------------------
+// Compose a group: page 1 upright, the rest rotated 90° into horizontal bands
+// ---------------------------------------------------------------------------
 
-    // Cascade down-right: each page sits lower and further right than the last.
-    const x = Math.round(PAGE_INSET * sheetW + idx * stepX + (slotW - w) / 2);
-    const y = Math.round(PAGE_INSET * sheetH + idx * stepY + (slotH - h) / 2);
+function composeGroup(pages, colorsRgb) {
+  const basePage = pages[0];
+  const width = basePage.width;
+  const height = basePage.height;
 
-    // White is multiply's identity, so untouched areas keep what is beneath.
-    ctx.drawImage(tinted, x, y, w, h);
-  });
+  // Page 1: tint and multiply onto white, filling the sheet.
+  const tintedBase = tintImage(basePage, colorsRgb[0]);
+  let result = multiplyBlend(createWhiteCanvas(width, height), tintedBase);
 
-  ctx.globalCompositeOperation = "source-over";
-  return sheet;
+  const rotatedPages = pages.slice(1);
+  const numRotated = rotatedPages.length;
+
+  for (let idx = 0; idx < numRotated; idx++) {
+    const color = colorsRgb[(idx + 1) % colorsRgb.length];
+    const tinted = tintImage(rotatedPages[idx], color);
+
+    // Rotate 90° clockwise so a portrait page becomes landscape.
+    const rotated = document.createElement("canvas");
+    rotated.width = tinted.height;
+    rotated.height = tinted.width;
+    const rotCtx = rotated.getContext("2d");
+    rotCtx.translate(rotated.width, 0);
+    rotCtx.rotate(Math.PI / 2);
+    rotCtx.drawImage(tinted, 0, 0);
+
+    // Each rotated page gets an equal horizontal band of the sheet.
+    const regionHeight = Math.floor(height / numRotated);
+    const regionTop = idx * regionHeight;
+
+    // Scale to fit the band, preserving aspect ratio.
+    const scaleFactor = Math.min(
+      width / rotated.width,
+      regionHeight / rotated.height,
+    );
+    const newW = Math.floor(rotated.width * scaleFactor);
+    const newH = Math.floor(rotated.height * scaleFactor);
+
+    const scaled = document.createElement("canvas");
+    scaled.width = newW;
+    scaled.height = newH;
+    scaled.getContext("2d").drawImage(rotated, 0, 0, newW, newH);
+
+    // Centre it horizontally, and vertically within its band.
+    const offsetX = Math.floor((width - newW) / 2);
+    const offsetY = regionTop + Math.floor((regionHeight - newH) / 2);
+
+    const layer = createWhiteCanvas(width, height);
+    layer.getContext("2d").drawImage(scaled, offsetX, offsetY);
+
+    result = multiplyBlend(result, layer);
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -245,12 +264,9 @@ export async function processPdf(
   scale = 2.0,
   colorsHex = DEFAULT_COLORS,
   pagesPerSheet = DEFAULT_PAGES_PER_SHEET,
-  offsetPercent = DEFAULT_OFFSET_PERCENT,
 ) {
-  // A non-positive group size would never advance the grouping loop, and a
-  // negative offset would grow pages past the sheet.
+  // A non-positive group size would never advance the grouping loop.
   const groupSize = Math.max(1, Math.floor(pagesPerSheet) || 1);
-  const offset = Math.max(0, offsetPercent) / 100;
 
   const colorsRgb = colorsHex.map(hexToRgb);
   const { pages, totalPages } = await renderPdfPages(pdfBytes, scale);
@@ -262,9 +278,7 @@ export async function processPdf(
   }
 
   // Compose each group
-  const composites = groups.map((group) =>
-    composeGroup(group, colorsRgb, offset),
-  );
+  const composites = groups.map((group) => composeGroup(group, colorsRgb));
 
   return { composites, totalPages };
 }

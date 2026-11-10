@@ -7,7 +7,6 @@ import {
   canvasToDataUrl,
   DEFAULT_COLORS,
   DEFAULT_PAGES_PER_SHEET,
-  DEFAULT_OFFSET_PERCENT,
   defaultColorAt,
 } from "./processor";
 
@@ -31,7 +30,6 @@ function App() {
   const [fileName, setFileName] = useState("");
   const [pdfScale, setPdfScale] = useState(2);
   const [pagesPerSheet, setPagesPerSheet] = useState(DEFAULT_PAGES_PER_SHEET);
-  const [offsetPercent, setOffsetPercent] = useState(DEFAULT_OFFSET_PERCENT);
   const [rawFile, setRawFile] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -67,7 +65,6 @@ function App() {
           pdfScale,
           colors.slice(0, pagesPerSheet),
           pagesPerSheet,
-          offsetPercent,
         );
 
         const results = composites.map((composite, i) => {
@@ -89,7 +86,7 @@ function App() {
         setLoading(false);
       }
     },
-    [pdfScale, colors, pagesPerSheet, offsetPercent],
+    [pdfScale, colors, pagesPerSheet],
   );
 
   // Reprocess whenever the source file or any layout setting changes.
@@ -182,8 +179,6 @@ function App() {
           onPdfScaleChange={setPdfScale}
           pagesPerSheet={pagesPerSheet}
           onPagesPerSheetChange={updatePagesPerSheet}
-          offsetPercent={offsetPercent}
-          onOffsetPercentChange={setOffsetPercent}
           overlay={settingsOpen}
           onClose={() => setSettingsOpen(false)}
           onSelectPdf={() => document.getElementById("pdf-file-input")?.click()}

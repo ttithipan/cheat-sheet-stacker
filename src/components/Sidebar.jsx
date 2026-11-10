@@ -113,8 +113,6 @@ function Sidebar({
   onPdfScaleChange,
   pagesPerSheet,
   onPagesPerSheetChange,
-  offsetPercent,
-  onOffsetPercentChange,
   overlay,
   onClose,
   onSelectPdf,
@@ -250,14 +248,6 @@ function Sidebar({
           onChange={onPagesPerSheetChange}
         />
         <NumberField
-          label="Offset (%)"
-          value={offsetPercent}
-          min={0}
-          step={0.1}
-          onChange={onOffsetPercentChange}
-          helperText="diagonal shift per page"
-        />
-        <NumberField
           label="Quality (scale)"
           value={pdfScale}
           min={0.1}
@@ -316,7 +306,7 @@ function Sidebar({
             Every {pagesPerSheet} page{pagesPerSheet === 1 ? "" : "s"} become 1
             stacked sheet
           </li>
-          <li>Each page is tinted &amp; offset diagonally</li>
+          <li>Page 1 upright, the rest rotated 90°</li>
           <li>Layers are multiply-blended</li>
         </ol>
         <div

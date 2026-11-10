@@ -76,8 +76,7 @@ const PreviewCanvas = forwardRef(function PreviewCanvas(
             className="text-xs text-center max-w-xs"
             style={{ color: "var(--text-secondary)" }}
           >
-            Pages are grouped, tinted, offset diagonally, and
-            multiply-blended.
+            Pages are grouped, tinted, rotated and multiply-blended.
           </p>
         </div>
       </div>
