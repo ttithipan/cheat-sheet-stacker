@@ -2,7 +2,7 @@
  * processor.js — Client-side PDF processing pipeline.
  *
  * Uses pdfjs-dist for PDF rendering and the Canvas API for
- * tinting, rotation, and multiply-blend compositing.
+ * tinting and diagonal-offset multiply-blend compositing.
  */
 
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.min.mjs";
@@ -15,6 +15,27 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 
 const DARK_THRESHOLD = 180;
 
+export const DEFAULT_PAGES_PER_SHEET = 3;
+
+/**
+ * Tint palette. Pages beyond the palette length get a nearby colour derived
+ * from it (see defaultColorAt), so extra pages stay in the same family.
+ */
+export const DEFAULT_COLORS = [
+  "#FFA57D", // peach
+  "#F4A4C0", // pink
+  "#A8C6FE", // blue
+  "#B1DD8C", // green
+  "#B18CFE", // violet
+];
+
+/** Default diagonal offset per page, as a percentage of the page. */
+export const DEFAULT_OFFSET_PERCENT = 2.7;
+
+// Stack geometry, expressed as a fraction of the sheet dimensions.
+// PAGE_INSET is the margin around the outside of the stack.
+const PAGE_INSET = 0.035;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -26,6 +47,68 @@ function hexToRgb(hex) {
     g: parseInt(h.substring(2, 4), 16),
     b: parseInt(h.substring(4, 6), 16),
   };
+}
+
+function rgbToHsl({ r, g, b }) {
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const l = (max + min) / 2;
+
+  if (max === min) return { h: 0, s: 0, l };
+
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h;
+  if (max === rn) h = ((gn - bn) / d + (gn < bn ? 6 : 0)) / 6;
+  else if (max === gn) h = ((bn - rn) / d + 2) / 6;
+  else h = ((rn - gn) / d + 4) / 6;
+
+  return { h, s, l };
+}
+
+function hslToHex(h, s, l) {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h * 6) % 2) - 1));
+  const m = l - c / 2;
+  const hh = h * 6;
+
+  let rgb;
+  if (hh < 1) rgb = [c, x, 0];
+  else if (hh < 2) rgb = [x, c, 0];
+  else if (hh < 3) rgb = [0, c, x];
+  else if (hh < 4) rgb = [0, x, c];
+  else if (hh < 5) rgb = [x, 0, c];
+  else rgb = [c, 0, x];
+
+  const channel = (v) =>
+    Math.round(
+      Math.min(1, Math.max(0, v + m)) * 255,
+    )
+      .toString(16)
+      .padStart(2, "0");
+
+  return `#${channel(rgb[0])}${channel(rgb[1])}${channel(rgb[2])}`.toUpperCase();
+}
+
+/**
+ * Colour for page slot `index`. The first `DEFAULT_COLORS.length` slots use the
+ * palette as-is; later slots rotate the hue a little further each cycle and
+ * nudge the lightness, so they read as siblings of the base colour rather than
+ * as repeats.
+ */
+export function defaultColorAt(index) {
+  const base = DEFAULT_COLORS[index % DEFAULT_COLORS.length];
+  const cycle = Math.floor(index / DEFAULT_COLORS.length);
+  if (cycle === 0) return base;
+
+  const { h, s, l } = rgbToHsl(hexToRgb(base));
+  const hue = (h + cycle * 0.05) % 1; // ~18° per cycle
+  const lightness = Math.min(0.9, Math.max(0.5, l + (cycle % 2 === 1 ? -0.07 : 0.05)));
+
+  return hslToHex(hue, s, lightness);
 }
 
 function createWhiteCanvas(width, height) {
@@ -101,84 +184,53 @@ function tintImage(sourceCanvas, color) {
 }
 
 // ---------------------------------------------------------------------------
-// Multiply blend
+// Compose a group of pages as a diagonally offset stack
 // ---------------------------------------------------------------------------
 
-function multiplyBlend(baseCanvas, overlayCanvas) {
-  const result = document.createElement("canvas");
-  result.width = baseCanvas.width;
-  result.height = baseCanvas.height;
-  const ctx = result.getContext("2d");
+function composeGroup(pages, colorsRgb, offset) {
+  const sheetW = pages[0].width;
+  const sheetH = pages[0].height;
+  const count = pages.length;
 
-  ctx.drawImage(baseCanvas, 0, 0);
+  const usableW = sheetW * (1 - 2 * PAGE_INSET);
+  const usableH = sheetH * (1 - 2 * PAGE_INSET);
+
+  // Each page sits `offset` (a fraction of the usable area) further right and
+  // down than the previous one, and every page shrinks by the total offset so
+  // the whole fan fits on the sheet. Pages are floored at one pixel so an
+  // extreme offset degrades to a thin fan instead of an invalid canvas.
+  const requestedStepX = count > 1 ? offset * usableW : 0;
+  const requestedStepY = count > 1 ? offset * usableH : 0;
+  const slotW = Math.max(1, usableW - requestedStepX * (count - 1));
+  const slotH = Math.max(1, usableH - requestedStepY * (count - 1));
+
+  // Derive the step from the actual slot so the last page stays on the sheet.
+  const stepX = count > 1 ? (usableW - slotW) / (count - 1) : 0;
+  const stepY = count > 1 ? (usableH - slotH) / (count - 1) : 0;
+
+  const sheet = createWhiteCanvas(sheetW, sheetH);
+  const ctx = sheet.getContext("2d");
+  ctx.imageSmoothingQuality = "high";
   ctx.globalCompositeOperation = "multiply";
-  ctx.drawImage(overlayCanvas, 0, 0);
 
-  return result;
-}
+  pages.forEach((page, idx) => {
+    const tinted = tintImage(page, colorsRgb[idx % colorsRgb.length]);
 
-// ---------------------------------------------------------------------------
-// Compose a group of 1-3 pages
-// ---------------------------------------------------------------------------
+    // Contain-fit the page in its slot, preserving aspect ratio.
+    const fit = Math.min(slotW / tinted.width, slotH / tinted.height);
+    const w = Math.round(tinted.width * fit);
+    const h = Math.round(tinted.height * fit);
 
-function composeGroup(pages, colorsRgb) {
-  const basePage = pages[0];
-  const width = basePage.width;
-  const height = basePage.height;
+    // Cascade down-right: each page sits lower and further right than the last.
+    const x = Math.round(PAGE_INSET * sheetW + idx * stepX + (slotW - w) / 2);
+    const y = Math.round(PAGE_INSET * sheetH + idx * stepY + (slotH - h) / 2);
 
-  // Page 1: tint + multiply onto white
-  const tintedBase = tintImage(basePage, colorsRgb[0]);
-  let result = multiplyBlend(createWhiteCanvas(width, height), tintedBase);
+    // White is multiply's identity, so untouched areas keep what is beneath.
+    ctx.drawImage(tinted, x, y, w, h);
+  });
 
-  // Pages 2-3: tint → rotate 90° CW → scale to region → multiply blend
-  const rotatedPages = pages.slice(1);
-  const numRotated = rotatedPages.length;
-
-  for (let idx = 0; idx < numRotated; idx++) {
-    const color = colorsRgb[idx + 1] || colorsRgb[1];
-    const tinted = tintImage(rotatedPages[idx], color);
-
-    // Rotate 90° clockwise
-    const rotated = document.createElement("canvas");
-    rotated.width = tinted.height;
-    rotated.height = tinted.width;
-    const rotCtx = rotated.getContext("2d");
-    rotCtx.translate(rotated.width, 0);
-    rotCtx.rotate(Math.PI / 2);
-    rotCtx.drawImage(tinted, 0, 0);
-
-    // Region dimensions
-    const regionHeight =
-      numRotated > 1 ? Math.floor(height / numRotated) : height;
-    const regionTop = numRotated > 1 ? idx * regionHeight : 0;
-
-    // Scale rotated page to fit within the region (preserve aspect ratio)
-    const scaleX = width / rotated.width;
-    const scaleY = regionHeight / rotated.height;
-    const scaleFactor = Math.min(scaleX, scaleY);
-
-    const newW = Math.floor(rotated.width * scaleFactor);
-    const newH = Math.floor(rotated.height * scaleFactor);
-
-    const scaled = document.createElement("canvas");
-    scaled.width = newW;
-    scaled.height = newH;
-    const scaleCtx = scaled.getContext("2d");
-    scaleCtx.drawImage(rotated, 0, 0, newW, newH);
-
-    // Center within the region
-    const offsetX = Math.floor((width - newW) / 2);
-    const offsetY = regionTop + Math.floor((regionHeight - newH) / 2);
-
-    // White layer with scaled rotated page pasted on
-    const layer = createWhiteCanvas(width, height);
-    layer.getContext("2d").drawImage(scaled, offsetX, offsetY);
-
-    // Multiply blend onto result
-    result = multiplyBlend(result, layer);
-  }
-
-  return result;
+  ctx.globalCompositeOperation = "source-over";
+  return sheet;
 }
 
 // ---------------------------------------------------------------------------
@@ -188,22 +240,31 @@ function composeGroup(pages, colorsRgb) {
 /**
  * Full pipeline: PDF bytes → grouped composites + page count.
  */
-export async function processPdf(pdfBytes, scale = 2.0, colorsHex = null) {
-  if (!colorsHex) {
-    colorsHex = ["#ED553B", "#3CAEA3", "#173F5F"];
-  }
+export async function processPdf(
+  pdfBytes,
+  scale = 2.0,
+  colorsHex = DEFAULT_COLORS,
+  pagesPerSheet = DEFAULT_PAGES_PER_SHEET,
+  offsetPercent = DEFAULT_OFFSET_PERCENT,
+) {
+  // A non-positive group size would never advance the grouping loop, and a
+  // negative offset would grow pages past the sheet.
+  const groupSize = Math.max(1, Math.floor(pagesPerSheet) || 1);
+  const offset = Math.max(0, offsetPercent) / 100;
 
   const colorsRgb = colorsHex.map(hexToRgb);
   const { pages, totalPages } = await renderPdfPages(pdfBytes, scale);
 
-  // Group pages into triplets
+  // Group pages into sheets, last group may be partial
   const groups = [];
-  for (let i = 0; i < pages.length; i += 3) {
-    groups.push(pages.slice(i, i + 3));
+  for (let i = 0; i < pages.length; i += groupSize) {
+    groups.push(pages.slice(i, i + groupSize));
   }
 
   // Compose each group
-  const composites = groups.map((group) => composeGroup(group, colorsRgb));
+  const composites = groups.map((group) =>
+    composeGroup(group, colorsRgb, offset),
+  );
 
   return { composites, totalPages };
 }

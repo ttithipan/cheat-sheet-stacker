@@ -1,20 +1,120 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
-import MenuItem from "@mui/material/MenuItem";
-import Select from "@mui/material/Select";
-import FormControl from "@mui/material/FormControl";
-import InputLabel from "@mui/material/InputLabel";
+import TextField from "@mui/material/TextField";
 import PaletteIcon from "@mui/icons-material/Palette";
 import DownloadIcon from "@mui/icons-material/Download";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
+
+const FIELD_SX = {
+  "& .MuiInputLabel-root": {
+    color: "var(--text-secondary)",
+    fontFamily: "Inter, sans-serif",
+  },
+  "& .MuiInputLabel-root.Mui-focused": { color: "#a5b4fc" },
+  "& .MuiInputBase-input": {
+    color: "var(--text-primary)",
+    fontFamily: "Inter, sans-serif",
+  },
+  "& .MuiOutlinedInput-notchedOutline": {
+    borderColor: "var(--panel-border)",
+  },
+  "&:hover .MuiOutlinedInput-notchedOutline": {
+    borderColor: "rgba(99,102,241,0.5)",
+  },
+  "& .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline": {
+    borderColor: "#6366f1",
+  },
+  "& .MuiFormHelperText-root": {
+    color: "var(--text-secondary)",
+    fontFamily: "Inter, sans-serif",
+  },
+};
+
+/**
+ * Free-form numeric input. Typing stays local to the field and the value is
+ * committed once the user stops typing (or presses Enter / blurs), so a
+ * half-typed number never triggers a re-render of the whole PDF.
+ */
+function NumberField({ label, value, min, max, step = 1, onChange, helperText }) {
+  const [draft, setDraft] = useState(String(value));
+
+  const clamp = (n) => {
+    let result = n;
+    if (min !== undefined) result = Math.max(min, result);
+    if (max !== undefined) result = Math.min(max, result);
+    return result;
+  };
+
+  // Keep the field in sync when the value is changed from outside the field.
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  const commitDraft = () => {
+    const parsed = Number(draft);
+    if (draft.trim() === "" || Number.isNaN(parsed)) {
+      setDraft(String(value));
+      return;
+    }
+    const clamped = clamp(parsed);
+    setDraft(String(clamped));
+    if (clamped !== value) onChange(clamped);
+  };
+
+  // Also commit after a pause, so the spinner arrows and arrow keys work
+  // without needing to blur the field.
+  useEffect(() => {
+    if (draft.trim() === "" || Number(draft) === value) return;
+    const timer = setTimeout(() => {
+      const parsed = Number(draft);
+      if (Number.isNaN(parsed)) return;
+      const clamped = clamp(parsed);
+      setDraft(String(clamped));
+      if (clamped !== value) onChange(clamped);
+    }, 500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft, value, min, max, onChange]);
+
+  return (
+    <TextField
+      size="small"
+      fullWidth
+      label={label}
+      type="number"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commitDraft}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          commitDraft();
+          e.currentTarget.blur();
+        }
+      }}
+      helperText={helperText}
+      slotProps={{
+        htmlInput: {
+          min: min ?? undefined,
+          max: max ?? undefined,
+          step,
+        },
+      }}
+      sx={FIELD_SX}
+    />
+  );
+}
 
 function Sidebar({
   colors,
   onColorChange,
   pdfScale,
   onPdfScaleChange,
+  pagesPerSheet,
+  onPagesPerSheetChange,
+  offsetPercent,
+  onOffsetPercentChange,
   overlay,
   onClose,
   onSelectPdf,
@@ -135,6 +235,40 @@ function Sidebar({
 
       <div style={{ borderTop: "1px solid var(--panel-border)" }} />
 
+      {/* Layout */}
+      <div className="flex flex-col gap-3">
+        <p
+          className="text-xs font-medium uppercase tracking-wider"
+          style={{ color: "var(--text-secondary)" }}
+        >
+          Sheet Layout
+        </p>
+        <NumberField
+          label="Pages per sheet"
+          value={pagesPerSheet}
+          min={1}
+          onChange={onPagesPerSheetChange}
+        />
+        <NumberField
+          label="Offset (%)"
+          value={offsetPercent}
+          min={0}
+          step={0.1}
+          onChange={onOffsetPercentChange}
+          helperText="diagonal shift per page"
+        />
+        <NumberField
+          label="Quality (scale)"
+          value={pdfScale}
+          min={0.1}
+          step={0.25}
+          onChange={onPdfScaleChange}
+          helperText="higher is sharper but slower"
+        />
+      </div>
+
+      <div style={{ borderTop: "1px solid var(--panel-border)" }} />
+
       {/* Colors */}
       <div className="flex flex-col gap-2">
         <p
@@ -143,24 +277,12 @@ function Sidebar({
         >
           Tint Colors
         </p>
-        {[
-          { label: "Page 1 (Normal)", key: "primary", color: colors.primary },
-          {
-            label: "Page 2 (Rotated)",
-            key: "secondary",
-            color: colors.secondary,
-          },
-          {
-            label: "Page 3 (Rotated)",
-            key: "tertiary",
-            color: colors.tertiary,
-          },
-        ].map(({ label, key, color }) => (
-          <div key={key} className="flex items-center gap-2">
+        {Array.from({ length: pagesPerSheet }, (_, index) => (
+          <div key={index} className="flex items-center gap-2">
             <input
               type="color"
-              value={color}
-              onChange={(e) => onColorChange(key, e.target.value)}
+              value={colors[index] || "#000000"}
+              onChange={(e) => onColorChange(index, e.target.value)}
               style={{
                 width: 28,
                 height: 28,
@@ -172,60 +294,11 @@ function Sidebar({
               }}
             />
             <span className="text-xs" style={{ color: "var(--text-primary)" }}>
-              {label}
+              Page {index + 1}
             </span>
           </div>
         ))}
       </div>
-
-      {/* Scale */}
-      <FormControl fullWidth size="small">
-        <InputLabel
-          id="ql"
-          sx={{
-            color: "var(--text-secondary)",
-            fontFamily: "Inter, sans-serif",
-            "&.Mui-focused": { color: "#a5b4fc" },
-          }}
-        >
-          Quality (Scale)
-        </InputLabel>
-        <Select
-          labelId="ql"
-          value={pdfScale || 2}
-          label="Quality (Scale)"
-          onChange={(e) => onPdfScaleChange(e.target.value)}
-          sx={{
-            color: "var(--text-primary)",
-            fontFamily: "Inter, sans-serif",
-            ".MuiOutlinedInput-notchedOutline": {
-              borderColor: "var(--panel-border)",
-            },
-            "&:hover .MuiOutlinedInput-notchedOutline": {
-              borderColor: "rgba(99,102,241,0.5)",
-            },
-            "&.Mui-focused .MuiOutlinedInput-notchedOutline": {
-              borderColor: "#6366f1",
-            },
-            ".MuiSvgIcon-root": { color: "var(--text-secondary)" },
-          }}
-          MenuProps={{
-            PaperProps: {
-              sx: {
-                backgroundColor: "var(--theme-menu-bg)",
-                border: "1px solid var(--panel-border)",
-                color: "var(--text-primary)",
-                fontFamily: "Inter, sans-serif",
-              },
-            },
-          }}
-        >
-          <MenuItem value={1}>1x (Low - Fast)</MenuItem>
-          <MenuItem value={1.5}>1.5x (Medium)</MenuItem>
-          <MenuItem value={2}>2x (High - Default)</MenuItem>
-          <MenuItem value={3}>3x (Ultra - Slow)</MenuItem>
-        </Select>
-      </FormControl>
 
       <div style={{ borderTop: "1px solid var(--panel-border)" }} />
 
@@ -239,8 +312,11 @@ function Sidebar({
         </p>
         <ol className="list-decimal list-inside space-y-1">
           <li>Select a multi-page PDF</li>
-          <li>Every 3 pages become 1 stacked sheet</li>
-          <li>Pages are tinted & rotated 90°</li>
+          <li>
+            Every {pagesPerSheet} page{pagesPerSheet === 1 ? "" : "s"} become 1
+            stacked sheet
+          </li>
+          <li>Each page is tinted &amp; offset diagonally</li>
           <li>Layers are multiply-blended</li>
         </ol>
         <div
@@ -256,9 +332,15 @@ function Sidebar({
           <p className="mt-1">
             Use{" "}
             <strong style={{ color: "var(--text-primary)" }}>
-              Arial, size 11
+              Arial, size 12
             </strong>{" "}
             for best readability.
+          </p>
+          <p className="mt-1">
+            <strong style={{ color: "var(--text-primary)" }}>
+              Lighter tint colours
+            </strong>{" "}
+            work best — stacked pages already darken each other.
           </p>
         </div>
       </div>

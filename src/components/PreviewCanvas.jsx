@@ -76,7 +76,7 @@ const PreviewCanvas = forwardRef(function PreviewCanvas(
             className="text-xs text-center max-w-xs"
             style={{ color: "var(--text-secondary)" }}
           >
-            Pages are grouped into triplets, tinted, rotated, and
+            Pages are grouped, tinted, offset diagonally, and
             multiply-blended.
           </p>
         </div>
@@ -84,7 +84,7 @@ const PreviewCanvas = forwardRef(function PreviewCanvas(
     );
   }
 
-  if (loading) {
+  if (loading && !resultImage) {
     return (
       <div className="glass-panel m-auto">
         <div className="flex flex-col items-center justify-center gap-4 p-12 sm:p-16">
@@ -105,7 +105,21 @@ const PreviewCanvas = forwardRef(function PreviewCanvas(
       onWheel={handleWheel}
     >
       <canvas ref={canvasRef} style={{ display: "block", maxWidth: "100%" }} />
-      {totalGroups > 1 && (
+
+      {/* Kept as an overlay so the canvas stays mounted while re-processing. */}
+      {loading && (
+        <div
+          className="absolute inset-0 flex flex-col items-center justify-center gap-3"
+          style={{ backgroundColor: "rgba(255,255,255,0.75)" }}
+        >
+          <div className="animate-spin text-2xl">⏳</div>
+          <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
+            Processing...
+          </p>
+        </div>
+      )}
+
+      {totalGroups > 1 && !loading && (
         <div
           className="absolute bottom-3 right-3 text-xs font-medium px-2 py-1 rounded-full"
           style={{

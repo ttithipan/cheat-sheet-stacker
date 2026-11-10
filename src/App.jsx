@@ -1,24 +1,53 @@
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import TopRibbon from "./components/TopRibbon";
 import PreviewCanvas from "./components/PreviewCanvas";
 import Sidebar from "./components/Sidebar";
-import { processPdf, canvasToDataUrl } from "./processor";
+import {
+  processPdf,
+  canvasToDataUrl,
+  DEFAULT_COLORS,
+  DEFAULT_PAGES_PER_SHEET,
+  DEFAULT_OFFSET_PERCENT,
+  defaultColorAt,
+} from "./processor";
+
+function ensureColors(colors, count) {
+  if (colors.length >= count) return colors;
+  const next = colors.slice();
+  while (next.length < count) {
+    next.push(defaultColorAt(next.length));
+  }
+  return next;
+}
 
 function App() {
   const [resultImages, setResultImages] = useState([]);
-  const [totalPages, setTotalPages] = useState(0);
   const [totalGroups, setTotalGroups] = useState(0);
   const [activeGroupIndex, setActiveGroupIndex] = useState(0);
-  const [colors, setColors] = useState({
-    primary: "#ED553B",
-    secondary: "#3CAEA3",
-    tertiary: "#173F5F",
-  });
+  const [colors, setColors] = useState(() =>
+    DEFAULT_COLORS.slice(0, DEFAULT_PAGES_PER_SHEET),
+  );
   const [loading, setLoading] = useState(false);
   const [fileName, setFileName] = useState("");
   const [pdfScale, setPdfScale] = useState(2);
+  const [pagesPerSheet, setPagesPerSheet] = useState(DEFAULT_PAGES_PER_SHEET);
+  const [offsetPercent, setOffsetPercent] = useState(DEFAULT_OFFSET_PERCENT);
   const [rawFile, setRawFile] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const updatePagesPerSheet = useCallback((value) => {
+    const count = Math.max(1, Math.round(value));
+    setPagesPerSheet(count);
+    setColors((prev) => ensureColors(prev, count));
+  }, []);
+
+  const updateColor = useCallback((index, value) => {
+    setColors((prev) => {
+      const next = prev.slice();
+      next[index] = value;
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", "light");
@@ -29,8 +58,6 @@ function App() {
       if (!file || file.type !== "application/pdf") return;
 
       setLoading(true);
-      setFileName(file.name);
-      setRawFile(file);
       setActiveGroupIndex(0);
 
       try {
@@ -38,12 +65,14 @@ function App() {
         const { composites, totalPages: numPages } = await processPdf(
           pdfBytes,
           pdfScale,
-          [colors.primary, colors.secondary, colors.tertiary],
+          colors.slice(0, pagesPerSheet),
+          pagesPerSheet,
+          offsetPercent,
         );
 
         const results = composites.map((composite, i) => {
-          const start = i * 3;
-          const end = Math.min(start + 3, numPages);
+          const start = i * pagesPerSheet;
+          const end = Math.min(start + pagesPerSheet, numPages);
           return {
             image: canvasToDataUrl(composite),
             groupIndex: i,
@@ -52,7 +81,6 @@ function App() {
         });
 
         setResultImages(results);
-        setTotalPages(numPages);
         setTotalGroups(results.length);
       } catch (err) {
         console.error("Error processing PDF:", err);
@@ -61,12 +89,13 @@ function App() {
         setLoading(false);
       }
     },
-    [pdfScale, colors],
+    [pdfScale, colors, pagesPerSheet, offsetPercent],
   );
 
+  // Reprocess whenever the source file or any layout setting changes.
   useEffect(() => {
     if (rawFile) handleFileSelect(rawFile);
-  }, [pdfScale, colors]);
+  }, [handleFileSelect, rawFile]);
 
   const goToPrevGroup = useCallback(() => {
     setActiveGroupIndex((prev) => Math.max(0, prev - 1));
@@ -78,7 +107,10 @@ function App() {
 
   const handleFileChange = (e) => {
     const file = e.target.files?.[0];
-    if (file) handleFileSelect(file);
+    if (file) {
+      setFileName(file.name);
+      setRawFile(file);
+    }
     e.target.value = "";
   };
 
@@ -145,11 +177,13 @@ function App() {
       >
         <Sidebar
           colors={colors}
-          onColorChange={(key, value) =>
-            setColors((prev) => ({ ...prev, [key]: value }))
-          }
+          onColorChange={updateColor}
           pdfScale={pdfScale}
           onPdfScaleChange={setPdfScale}
+          pagesPerSheet={pagesPerSheet}
+          onPagesPerSheetChange={updatePagesPerSheet}
+          offsetPercent={offsetPercent}
+          onOffsetPercentChange={setOffsetPercent}
           overlay={settingsOpen}
           onClose={() => setSettingsOpen(false)}
           onSelectPdf={() => document.getElementById("pdf-file-input")?.click()}
